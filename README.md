@@ -1,4 +1,4 @@
-markdown_v2 = """# Portfolio Project Plan: Autonomous Microgrid Energy Arbitrage Agent
+# Portfolio Project Plan: Autonomous Microgrid Energy Arbitrage Agent
 
 ## 1. Project Overview
 
@@ -35,7 +35,8 @@ This project follows an agile, progressively enhanced architecture where the fro
   * Multi-region line chart with controls: metric toggle (`price`/`demand`), region visibility, highlight region, manual refresh.
   * Real Australia map view (state polygons) with timeline slider and playback controls (run/pause/stop).
   * Right-side collapsible filter panel and latest data timestamp display.
-
+![Line Chart View](docs/images/dashboard-line-chart.png)
+![Map View](docs/images/dashboard-map-view.png)
 ### Phase 2: Forecasting Model & The Predictive Overlay
 **Description:** Building the predictive engine and overlaying its accuracy against baselines on the dashboard.
 * **Backend Outcomes:** * A trained deep learning model generating a 24-hour multi-variate forecast.
@@ -79,6 +80,11 @@ energy-arbitrage/
 ├── data/
 │   ├── raw/                    # Raw JSON/CSV dumps
 │   └── processed/              # Cleaned datasets
+│
+├── docs/
+│   └── images/                 # README screenshots/assets
+│       ├── dashboard-line-chart.png
+│       └── dashboard-map-view.png
 │
 ├── infrastructure/
 │   └── cloudformation.yaml     # AWS IaC template (deployed via console)
