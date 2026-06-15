@@ -22,6 +22,20 @@ This project follows an agile, progressively enhanced architecture where the fro
   * A time-series line chart tracking historical wholesale spot prices ($/MWh) alongside local solar irradiance.
 * **Language / Stack:** Python, Pandas, Streamlit or React, Jupyter Notebooks for EDA.
 
+**Phase 1 Progress Update (Implemented):**
+* **Backend Completed:** FastAPI endpoints are live in `src/main.py`:
+  * `/api/v1/market-data` for merged weather + market records
+  * `/api/v1/map-data` for recent NEM regional price/demand time-series
+  * Data pipeline is DataFrame-first internally, JSON at API boundary for frontend consumption.
+* **API Clients Completed:**
+  * `src/api_clients/pricing_api.py` returns DataFrames for market/network/regional demand use cases.
+  * `src/api_clients/open_meteo.py` supports both raw payload and standardized DataFrame helper.
+* **Frontend Completed (`frontend/v1_observability`):**
+  * React + Vite + TypeScript + ECharts app scaffolded and connected to backend APIs.
+  * Multi-region line chart with controls: metric toggle (`price`/`demand`), region visibility, highlight region, manual refresh.
+  * Real Australia map view (state polygons) with timeline slider and playback controls (run/pause/stop).
+  * Right-side collapsible filter panel and latest data timestamp display.
+
 ### Phase 2: Forecasting Model & The Predictive Overlay
 **Description:** Building the predictive engine and overlaying its accuracy against baselines on the dashboard.
 * **Backend Outcomes:** * A trained deep learning model generating a 24-hour multi-variate forecast.
@@ -54,11 +68,10 @@ This project follows an agile, progressively enhanced architecture where the fro
 
 ---
 
-## 3. Expected Folder Structure
+## 3. Aligned Folder Structure (Current + Planned)
 ```text
-microgrid-arbitrage-agent/
+energy-arbitrage/
 │
-├── .github/workflows/          # CI/CD pipelines
 ├── config/
 │   ├── settings.yaml           # House parameters (battery capacity, location)
 │   └── prompt_templates/       # Agent persona and constraints
@@ -76,17 +89,37 @@ microgrid-arbitrage-agent/
 │   └── 03_agent_reasoning.ipynb
 │
 ├── src/                        # Modularized Python Backend
-│   ├── api_clients/            # Open-Meteo, Amber API wrappers
 │   ├── models/                 # PyTorch/xLSTM architectures
-│   └── agent/                  # LLM orchestration and tools
+│   ├── agent/                  # LLM orchestration and tools
+│   ├── api_clients/
+│   │   ├── open_meteo.py
+│   │   ├── pricing_api.py
+│   │   └── testing.py
+│   ├── fetch_weather_history.py
+│   └── main.py                 # FastAPI app
 │
 ├── frontend/                   # Progressive Web Visualization
-│   ├── v1_observability/       # Map & Historical charts
+│   └── v1_observability/       # Implemented: map + time-series dashboard
+│   │   ├── src/
+│   │   │   ├── api/
+│   │   │   │   └── mapData.ts
+│   │   │   ├── components/
+│   │   │   │   ├── MapDataLineChart.tsx
+│   │   │   │   └── MapDataRegionMap.tsx
+│   │   │   ├── theme/
+│   │   │   │   └── metricTheme.ts
+│   │   │   ├── App.tsx
+│   │   │   ├── App.css
+│   │   │   ├── index.css
+│   │   │   └── main.tsx
+│   │   └── package.json
 │   ├── v2_predictive/          # Forecast overlays
 │   └── v3_command_center/      # Agent trace & ROI scorecard
 │
-├── tests/                      # Pytest suite
+├── tests/                      # Planned pytest suite
+├── GEMINI.md                   # Optional AI workflow notes
+├── environment.yaml            # Conda environment spec
 ├── .env.example                # API keys template
-├── requirements.txt            
+├── .gitignore
 └── README.md
 ```

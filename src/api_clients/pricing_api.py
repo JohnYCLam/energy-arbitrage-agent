@@ -1,6 +1,29 @@
 import pandas as pd
 from typing import Optional
 from datetime import datetime, timedelta
+from pathlib import Path
+import os
+
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    load_dotenv = None
+
+
+def _load_env_fallback(env_path: Path) -> None:
+    """Minimal .env loader for local script usage."""
+    if not env_path.exists():
+        return
+
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
 
 try:
     from openelectricity import OEClient
@@ -19,6 +42,12 @@ class OpenNEMClient:
     DEFAULT_NEM_REGIONS = ["VIC1", "NSW1", "QLD1", "SA1", "TAS1"]
 
     def __init__(self):
+        # Ensure .env is loaded when this module is run directly.
+        project_root = Path(__file__).resolve().parents[2]
+        if load_dotenv is not None:
+            load_dotenv(project_root / ".env")
+        else:
+            _load_env_fallback(project_root / ".env")
         self.client = OEClient()
 
     def get_market_timeseries(self, nem_region: str, days: int = 1) -> Optional[pd.DataFrame]:
