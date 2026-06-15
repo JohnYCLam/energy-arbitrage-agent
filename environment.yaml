@@ -1,0 +1,32 @@
+name: energy-arbitrage-env
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - pandas
+  - requests
+  - pyyaml
+  - python-dotenv
+  - fastapi
+  - uvicorn
+  - jupyter
+  - pytest
+  - pip:
+      # Standard PyPI packages
+      - "openelectricity[analysis]"
+      - darts
+      - shap
+      - langchain
+      - langgraph
+      - openai
+      
+      # -----------------------------------------------------------------
+      # HARDWARE NOTE: PyTorch for RTX 50-Series (CUDA 12.8 Nightly)
+      # Do NOT add torch to this list. Pip will install the CPU version.
+      # After running `conda env create`, activate the environment and 
+      # run the following command manually to install GPU acceleration:
+      #
+      # pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/cu128
+      # -----------------------------------------------------------------

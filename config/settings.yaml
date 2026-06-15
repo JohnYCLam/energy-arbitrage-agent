@@ -1,0 +1,9 @@
+location:
+  latitude: -37.8136  # Melbourne
+  longitude: 144.9631
+  timezone: "Australia/Melbourne"
+
+market:
+  nem_region: "VIC1"  # Primary region (Victoria)
+  adjacent_regions: ["NSW1", "SA1"] # Used to monitor interconnector influences
+  interval_minutes: 30 # Target resolution for merging data
