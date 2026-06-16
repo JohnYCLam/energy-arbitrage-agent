@@ -1,5 +1,4 @@
 import requests
-from datetime import date, timedelta
 from typing import Dict, Any, List, Optional, Union
 import pandas as pd
 
@@ -77,7 +76,7 @@ class OpenMeteoClient:
             "start_date": start_date,
             "end_date": end_date,
             "hourly": "temperature_2m,shortwave_radiation,cloudcover,wind_speed_10m",
-            "timezone": "auto" # Let Open-Meteo handle timezone conversion initially
+            "timezone": "Australia/Melbourne"  # Match the AEST(+10:00) energy timestamps
         }
         try:
             response = requests.get(self.BASE_URL, params=params)
@@ -108,45 +107,57 @@ class OpenMeteoClient:
         )
         return self._hourly_payload_to_df(weather_data)
 
+    def get_latest_weather_df(
+        self,
+        latitude: Union[float, List[float]],
+        longitude: Union[float, List[float]],
+        hours: int = 24,
+    ) -> Optional[pd.DataFrame]:
+        """
+        Returns only the most recent `hours` of weather in Melbourne local time
+        (tz-aware, +10:00) to match the AEST energy timestamps.
+
+        The Open-Meteo archive API returns whole calendar days, padding the
+        current day with future-dated rows. This clips to the trailing window
+        ending at "now" so the data never extends into the future.
+        """
+        tz = "Australia/Melbourne"
+        now_local = pd.Timestamp.now(tz=tz)
+        # Fetch an extra day of buffer so a full window survives the clip,
+        # regardless of timezone offsets or archive lag at the edges.
+        start_date = (now_local - pd.Timedelta(hours=hours) - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+        end_date = now_local.strftime("%Y-%m-%d")
+
+        df = self.get_historical_weather_df(
+            latitude=latitude,
+            longitude=longitude,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        if df is None or df.empty:
+            return None
+
+        # Open-Meteo returns naive local strings; localize them to Melbourne.
+        df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.tz_localize(tz)
+        cutoff = now_local - pd.Timedelta(hours=hours)
+        df = df[(df["timestamp"] > cutoff) & (df["timestamp"] <= now_local)]
+        return df.sort_values("timestamp").reset_index(drop=True)
+
 
 if __name__ == "__main__":
     client = OpenMeteoClient()
-    end_date = date.today()
-    start_date = end_date - timedelta(days=2)
 
-    latitude = -33.8688
-    longitude = 151.2093
+    latitude = -37.8136   # Melbourne
+    longitude = 144.9631
 
-    print("--- Fetching Open-Meteo historical weather (last 2 days) ---")
-    weather_data = client.get_historical_weather_payload(
-        latitude=latitude,
-        longitude=longitude,
-        start_date=start_date.strftime("%Y-%m-%d"),
-        end_date=end_date.strftime("%Y-%m-%d"),
-    )
+    print("--- Fetching Open-Meteo weather (latest 24 hours, Melbourne time) ---")
+    df_weather = client.get_latest_weather_df(latitude, longitude, hours=24)
 
-    if not weather_data:
-        print("No weather payload received.")
-    else:
-        print(f"Top-level keys: {list(weather_data.keys())}")
-        hourly = weather_data.get("hourly", {})
-        if hourly:
-            hourly_fields = list(hourly.keys())
-            print(f"Hourly fields: {hourly_fields}")
-            record_count = len(hourly.get("time", []))
-            print(f"Hourly record count: {record_count}")
-
-            sample_df = pd.DataFrame(hourly).head(5)
-            if not sample_df.empty:
-                print("\nSample hourly rows:")
-                print(sample_df.to_string(index=False))
-        else:
-            print("Payload missing 'hourly' data.")
-
-    df_weather = client._hourly_payload_to_df(weather_data)
     if df_weather is None or df_weather.empty:
-        print("\nDataFrame helper returned no data.")
+        print("No weather data received.")
     else:
-        print("\nStandardized DataFrame preview:")
-        print(df_weather.head(5).to_string(index=False))
-        print(f"DataFrame shape: {df_weather.shape}")
+        print(f"Records: {len(df_weather)} | Columns: {list(df_weather.columns)}")
+        print("\nHead:")
+        print(df_weather.head().to_string(index=False))
+        print("\nTail:")
+        print(df_weather.tail().to_string(index=False))

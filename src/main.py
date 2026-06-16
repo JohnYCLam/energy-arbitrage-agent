@@ -76,7 +76,8 @@ def get_market_data():
             col_map.update({col: 'demand' for col in df_price.columns if 'demand' in str(col).lower()})
 
             df_price = df_price.rename(columns=col_map)
-            df_price['timestamp'] = pd.to_datetime(df_price['timestamp'], utc=True)
+            # Energy timestamps are tz-aware AEST(+10:00); normalize to Melbourne.
+            df_price['timestamp'] = pd.to_datetime(df_price['timestamp'], utc=True).dt.tz_convert('Australia/Melbourne')
             df_price = df_price.set_index('timestamp')
             
             # Clean duplicates and resample explicitly to 30 minutes
@@ -89,7 +90,10 @@ def get_market_data():
 
         # 4. Standardize and Process Weather Data
         if df_weather is not None and not df_weather.empty:
-            df_weather['timestamp'] = pd.to_datetime(df_weather['timestamp'], utc=True)
+            # Open-Meteo now returns naive Melbourne local times; localize to match energy.
+            df_weather['timestamp'] = pd.to_datetime(df_weather['timestamp']).dt.tz_localize(
+                'Australia/Melbourne', ambiguous='NaT', nonexistent='shift_forward'
+            )
             df_weather = df_weather.set_index('timestamp')
             
             # Weather is hourly, so we forward-fill to get it to our 30-min target interval
@@ -100,9 +104,9 @@ def get_market_data():
         # 5. Merge Both Datasets Chronologically
         df_merged = pd.merge(df_price, df_weather, left_index=True, right_index=True, how='inner')
         
-        # Convert datetime index back to ISO strings and fill any nulls before passing to React
+        # Convert datetime index back to ISO strings (with +10:00 offset) before passing to React
         df_merged = df_merged.reset_index()
-        df_merged['timestamp'] = df_merged['timestamp'].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+        df_merged['timestamp'] = df_merged['timestamp'].apply(lambda ts: ts.isoformat())
         df_merged = df_merged.fillna(0)
 
         return df_merged.to_dict(orient="records")
@@ -112,17 +116,17 @@ def get_market_data():
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/v1/map-data")
-def get_map_data():
+def get_map_data(hours: int = 24):
     """
     Fetches the recent demand and price across all NEM regions to power the frontend geospatial map.
-    Returns the full recent window (e.g., 2 hours) to support timeline slider interactions.
+    Returns the full recent window (e.g., 24 hours) to support timeline slider interactions.
     """
     try:
         pricing_client = OpenNEMClient()
-        df = pricing_client.get_latest_nem_demand()
+        df = pricing_client.get_latest_nem_demand(hours=hours)
         
         if df is not None and not df.empty:
-            # Return the full 2-hour dataset to allow React to scrub through the timeline
+            # Return the requested time window dataset to allow React to scrub through the timeline
             df = df.sort_values(['interval', 'network_region'])
             return df.fillna(0).to_dict(orient="records")
             

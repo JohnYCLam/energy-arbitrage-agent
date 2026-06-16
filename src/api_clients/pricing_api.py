@@ -171,9 +171,9 @@ class OpenNEMClient:
             
         return df_merged
 
-    def get_latest_nem_demand(self, regions: Optional[list] = None) -> Optional[pd.DataFrame]:
+    def get_latest_nem_demand(self, regions: Optional[list] = None, hours: int = 2) -> Optional[pd.DataFrame]:
         regions = regions or self.DEFAULT_NEM_REGIONS
-        start_date = datetime.now() - timedelta(hours=2)
+        start_date = datetime.now() - timedelta(hours=hours)
         
         try:
             with self.client as client:
