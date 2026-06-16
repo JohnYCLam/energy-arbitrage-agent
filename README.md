@@ -25,18 +25,31 @@ This project follows an agile, progressively enhanced architecture where the fro
 **Phase 1 Progress Update (Implemented):**
 * **Backend Completed:** FastAPI endpoints are live in `src/main.py`:
   * `/api/v1/market-data` for merged weather + market records
-  * `/api/v1/map-data` for recent NEM regional price/demand time-series
+  * `/api/v1/map-data` for recent NEM regional price/demand time-series (sparse points forward-filled per region instead of zero-filled)
+  * `/api/v1/victoria-data` for VIC1 energy plus weather across five representative Victorian locations
   * Data pipeline is DataFrame-first internally, JSON at API boundary for frontend consumption.
+* **Timezone & Data Quality Handling:**
+  * Weather and energy timestamps are standardized to `Australia/Melbourne` (energy is tz-aware AEST `+10:00`; weather is fetched in local time and localized to match).
+  * Open-Meteo "latest 24 hours" clipping trims the archive API's future-dated, whole-day padding so data never extends past now.
+* **Shared Configuration:**
+  * `src/config/locations.py` defines `VICTORIA_WEATHER_LOCATIONS` (Melbourne, Mildura, Ararat, Bendigo, Traralgon) as the single source of truth, chosen to span demand, solar, and wind drivers across Victoria's renewable energy zones.
 * **API Clients Completed:**
   * `src/api_clients/pricing_api.py` returns DataFrames for market/network/regional demand use cases.
-  * `src/api_clients/open_meteo.py` supports both raw payload and standardized DataFrame helper.
+  * `src/api_clients/open_meteo.py` supports raw payload, standardized DataFrame helper, latest-24h clipping, and batched multi-location fetch (one API call, tidy per-region rows).
 * **Frontend Completed (`frontend/v1_observability`):**
   * React + Vite + TypeScript + ECharts app scaffolded and connected to backend APIs.
-  * Multi-region line chart with controls: metric toggle (`price`/`demand`), region visibility, highlight region, manual refresh.
-  * Real Australia map view (state polygons) with timeline slider and playback controls (run/pause/stop).
-  * Right-side collapsible filter panel and latest data timestamp display.
+  * Two sections behind a top tab nav: **Overview** (default) and **Victoria**.
+  * **Overview:** Multi-region line chart with controls (metric toggle `price`/`demand`, region visibility as buttons, highlight region, manual refresh) and a real Australia map view (state polygons) with timeline slider and playback controls (run/pause/stop).
+  * **Victoria:** Combined energy + weather line chart with three filter groups (energy metrics, weather metrics, regions) and dual-axis support; small-multiple maps (Map A energy, Map B weather) rendering equal-size region bubbles over a neutral warm-gray Australia base map zoomed to Victoria, driven by a shared timeframe slider.
+  * Right-side collapsible filter panel and latest data timestamp display on both sections.
+
+*Overview section:*
 ![Line Chart View](docs/images/dashboard-line-chart.png)
 ![Map View](docs/images/dashboard-map-view.png)
+
+*Victoria section:*
+![Victoria Line Chart View](docs/images/dashboard-vic-line-chart.png)
+![Victoria Map View](docs/images/dashboard-vic-map-view.png)
 ### Phase 2: Forecasting Model & The Predictive Overlay
 **Description:** Building the predictive engine and overlaying its accuracy against baselines on the dashboard.
 * **Backend Outcomes:** * A trained deep learning model generating a 24-hour multi-variate forecast.
@@ -94,24 +107,39 @@ energy-arbitrage/
 │   ├── 02_xlstm_forecasting.ipynb  # xLSTM setup (no backend arg)
 │   └── 03_agent_reasoning.ipynb
 │
+├── scripts/                    # One-off utilities
+│   └── generate_vic_regions.py # Builds Victoria sub-region polygons (Voronoi)
+│
 ├── src/                        # Modularized Python Backend
 │   ├── models/                 # PyTorch/xLSTM architectures
 │   ├── agent/                  # LLM orchestration and tools
+│   ├── config/
+│   │   └── locations.py        # VICTORIA_WEATHER_LOCATIONS constants
 │   ├── api_clients/
 │   │   ├── open_meteo.py
 │   │   ├── pricing_api.py
 │   │   └── testing.py
 │   ├── fetch_weather_history.py
+│   ├── fetch_energy_history.py
 │   └── main.py                 # FastAPI app
 │
 ├── frontend/                   # Progressive Web Visualization
-│   └── v1_observability/       # Implemented: map + time-series dashboard
+│   └── v1_observability/       # Implemented: Overview + Victoria dashboard
 │   │   ├── src/
 │   │   │   ├── api/
-│   │   │   │   └── mapData.ts
+│   │   │   │   ├── mapData.ts
+│   │   │   │   └── victoriaData.ts
+│   │   │   ├── assets/
+│   │   │   │   └── vic_regions.geojson
 │   │   │   ├── components/
 │   │   │   │   ├── MapDataLineChart.tsx
-│   │   │   │   └── MapDataRegionMap.tsx
+│   │   │   │   ├── MapDataRegionMap.tsx
+│   │   │   │   ├── OverviewSection.tsx
+│   │   │   │   ├── VictoriaSection.tsx
+│   │   │   │   ├── VictoriaLineChart.tsx
+│   │   │   │   └── VictoriaRegionMap.tsx
+│   │   │   ├── constants/
+│   │   │   │   └── victoriaRegions.ts
 │   │   │   ├── theme/
 │   │   │   │   └── metricTheme.ts
 │   │   │   ├── App.tsx

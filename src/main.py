@@ -13,6 +13,7 @@ load_dotenv(BASE_DIR / ".env")
 # Import our API Clients
 from src.api_clients.pricing_api import OpenNEMClient
 from src.api_clients.open_meteo import OpenMeteoClient
+from src.config.locations import VICTORIA_WEATHER_LOCATIONS
 
 app = FastAPI(title="Energy Arbitrage API", version="1.0.0")
 
@@ -38,6 +39,31 @@ def load_settings():
             "location": {"latitude": -33.8688, "longitude": 151.2093},
             "market": {"nem_region": "NSW1"}
         }
+
+
+def _normalize_energy_price_df(df_price: pd.DataFrame) -> pd.DataFrame:
+    """Maps and normalizes OpenElectricity price/demand timestamps to Melbourne time."""
+    col_map = {
+        col: "timestamp"
+        for col in df_price.columns
+        if "interval" in str(col).lower() or "time" in str(col).lower()
+    }
+    col_map.update(
+        {
+            col: "spot_price"
+            for col in df_price.columns
+            if "value" in str(col).lower() or "price" in str(col).lower()
+        }
+    )
+    col_map.update(
+        {col: "demand" for col in df_price.columns if "demand" in str(col).lower()}
+    )
+
+    normalized = df_price.rename(columns=col_map).copy()
+    normalized["timestamp"] = (
+        pd.to_datetime(normalized["timestamp"], utc=True).dt.tz_convert("Australia/Melbourne")
+    )
+    return normalized
 
 @app.get("/api/v1/market-data")
 def get_market_data():
@@ -69,16 +95,9 @@ def get_market_data():
         # 3. Standardize and Process Price Data
         if df_price is not None and not df_price.empty:
             df_price = df_price.reset_index()
-            
-            # Map OE columns to our standardized naming convention
-            col_map = {col: 'timestamp' for col in df_price.columns if 'interval' in str(col).lower() or 'time' in str(col).lower()}
-            col_map.update({col: 'spot_price' for col in df_price.columns if 'value' in str(col).lower() or 'price' in str(col).lower()})
-            col_map.update({col: 'demand' for col in df_price.columns if 'demand' in str(col).lower()})
 
-            df_price = df_price.rename(columns=col_map)
-            # Energy timestamps are tz-aware AEST(+10:00); normalize to Melbourne.
-            df_price['timestamp'] = pd.to_datetime(df_price['timestamp'], utc=True).dt.tz_convert('Australia/Melbourne')
-            df_price = df_price.set_index('timestamp')
+            df_price = _normalize_energy_price_df(df_price)
+            df_price = df_price.set_index("timestamp")
             
             # Clean duplicates and resample explicitly to 30 minutes
             df_price = df_price[~df_price.index.duplicated()]
@@ -126,11 +145,87 @@ def get_map_data(hours: int = 24):
         df = pricing_client.get_latest_nem_demand(hours=hours)
         
         if df is not None and not df.empty:
-            # Return the requested time window dataset to allow React to scrub through the timeline
-            df = df.sort_values(['interval', 'network_region'])
-            return df.fillna(0).to_dict(orient="records")
+            # Return requested window with sparse metrics forward-filled per region.
+            df = df.sort_values(["network_region", "interval"]).copy()
+            value_cols = [col for col in ("demand", "price") if col in df.columns]
+            if value_cols:
+                df[value_cols] = df.groupby("network_region")[value_cols].ffill()
+                df = df.dropna(subset=value_cols, how="all")
+            df = df.sort_values(["interval", "network_region"])
+            return df.to_dict(orient="records")
             
         return []
     except Exception as e:
         print(f"Map data pipeline error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/v1/victoria-data")
+def get_victoria_data(hours: int = 24):
+    """
+    Returns VIC1 energy data and 5-region Victoria weather for the latest window.
+    """
+    try:
+        pricing_client = OpenNEMClient()
+        meteo_client = OpenMeteoClient()
+
+        df_energy = pricing_client.get_market_timeseries(nem_region="VIC1", days=2)
+        df_weather = meteo_client.get_multi_location_weather_df(
+            locations=VICTORIA_WEATHER_LOCATIONS,
+            hours=hours,
+        )
+
+        energy_records = []
+        weather_records = []
+        tz = "Australia/Melbourne"
+        now_local = pd.Timestamp.now(tz=tz)
+        cutoff = now_local - pd.Timedelta(hours=hours)
+
+        if df_energy is not None and not df_energy.empty:
+            normalized_energy = _normalize_energy_price_df(df_energy)
+            normalized_energy = normalized_energy.sort_values("timestamp")
+            normalized_energy = normalized_energy[
+                (normalized_energy["timestamp"] > cutoff)
+                & (normalized_energy["timestamp"] <= now_local)
+            ]
+            # OE responses can occasionally contain sparse demand/price points.
+            # Carry forward last known values instead of forcing artificial zeros.
+            normalized_energy[["demand", "spot_price"]] = normalized_energy[
+                ["demand", "spot_price"]
+            ].ffill()
+            normalized_energy = normalized_energy.dropna(
+                subset=["demand", "spot_price"],
+                how="all",
+            )
+            normalized_energy = normalized_energy[["timestamp", "demand", "spot_price"]].rename(
+                columns={"spot_price": "price"}
+            )
+            normalized_energy["timestamp"] = normalized_energy["timestamp"].apply(
+                lambda ts: ts.isoformat()
+            )
+            energy_records = normalized_energy.to_dict(orient="records")
+
+        if df_weather is not None and not df_weather.empty:
+            weather_cols = [
+                "timestamp",
+                "region",
+                "temperature",
+                "solar_irradiance",
+                "cloudcover",
+                "wind_speed",
+            ]
+            normalized_weather = df_weather[weather_cols].sort_values(["timestamp", "region"])
+            normalized_weather = normalized_weather.fillna(0)
+            normalized_weather["timestamp"] = normalized_weather["timestamp"].apply(
+                lambda ts: ts.isoformat()
+            )
+            weather_records = normalized_weather.to_dict(orient="records")
+
+        return {
+            "locations": VICTORIA_WEATHER_LOCATIONS,
+            "energy": energy_records,
+            "weather": weather_records,
+        }
+    except Exception as e:
+        print(f"Victoria data pipeline error: {e}")
         raise HTTPException(status_code=500, detail=str(e))

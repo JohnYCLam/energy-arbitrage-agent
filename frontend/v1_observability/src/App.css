@@ -1,7 +1,7 @@
 .page {
-  max-width: 1240px;
+  max-width: 1520px;
   margin: 0 auto;
-  padding: 20px 22px 26px;
+  padding: 16px 10px 22px;
 }
 
 .page-header h1 {
@@ -16,6 +16,39 @@
   margin: 8px 0 0;
   color: var(--text-secondary);
   font-size: 0.98rem;
+}
+
+.section-tabs {
+  margin-top: 14px;
+  display: flex;
+  gap: 8px;
+}
+
+.section-tabs button {
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.section-tabs button.active {
+  background: #1e3a8a;
+  color: #ffffff;
+  border-color: #1e3a8a;
+}
+
+.section-description {
+  margin: 14px 0 0;
+  color: var(--text-secondary);
+}
+
+.section-description code {
+  background: #eef2f7;
+  border-radius: 4px;
+  padding: 1px 5px;
 }
 
 .content-grid {
@@ -103,6 +136,22 @@
   align-items: center;
 }
 
+.control-group.stacked {
+  display: grid;
+  gap: 8px;
+}
+
+.control-group.stacked .label {
+  min-width: 0;
+  margin-right: 0;
+}
+
+.option-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .control-group .label {
   font-weight: 600;
   margin-right: 6px;
@@ -161,6 +210,46 @@
   border-color: #1d4ed8;
 }
 
+.control-group button.active.active-temperature {
+  background: #dc2626;
+  border-color: #dc2626;
+}
+
+.control-group button.active.active-temperature:hover {
+  background: #b91c1c;
+  border-color: #b91c1c;
+}
+
+.control-group button.active.active-solar {
+  background: #d97706;
+  border-color: #d97706;
+}
+
+.control-group button.active.active-solar:hover {
+  background: #b45309;
+  border-color: #b45309;
+}
+
+.control-group button.active.active-cloudcover {
+  background: #475569;
+  border-color: #475569;
+}
+
+.control-group button.active.active-cloudcover:hover {
+  background: #334155;
+  border-color: #334155;
+}
+
+.control-group button.active.active-wind {
+  background: #0f766e;
+  border-color: #0f766e;
+}
+
+.control-group button.active.active-wind:hover {
+  background: #0f5f58;
+  border-color: #0f5f58;
+}
+
 .control-group button.active:hover:not(.active-price):not(.active-demand) {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
@@ -177,20 +266,18 @@
   gap: 8px;
 }
 
-.region-list label {
-  display: flex;
-  gap: 6px;
-  align-items: center;
+.region-list button {
   background: var(--accent-soft);
   border: 1px solid #d4dce6;
   border-radius: 999px;
-  padding: 4px 10px;
+  padding: 5px 12px;
   color: var(--text-primary);
   font-size: 0.9rem;
 }
 
-.region-list input[type="checkbox"] {
-  accent-color: var(--accent);
+.region-list button:hover {
+  border-color: #aeb9c7;
+  background: #f4f7fb;
 }
 
 .chart-card {
@@ -265,6 +352,45 @@
 .timeline-buttons button:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+
+.victoria-filters {
+  margin-bottom: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.victoria-map-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.vic-map-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+  background: #fbfdff;
+}
+
+.vic-map-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.vic-map-header h3 {
+  margin: 0;
+  font-size: 0.96rem;
+}
+
+.vic-map-header select {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  background: var(--bg-surface);
+  color: var(--text-primary);
 }
 
 .region-map {
@@ -346,5 +472,9 @@
 
   .filter-panel.collapsed {
     justify-content: flex-end;
+  }
+
+  .victoria-map-grid {
+    grid-template-columns: 1fr;
   }
 }
