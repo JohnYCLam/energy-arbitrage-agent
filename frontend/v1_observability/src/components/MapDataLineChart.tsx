@@ -105,7 +105,11 @@ export function MapDataLineChart({
   return (
     <section className="chart-card">
       <h2>{METRIC_LABEL[metric]} by Region</h2>
-      <ReactECharts option={option} style={{ height: "460px", width: "100%" }} />
+      <ReactECharts
+        option={option}
+        replaceMerge={["series"]}
+        style={{ height: "460px", width: "100%" }}
+      />
     </section>
   );
 }
