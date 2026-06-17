@@ -59,6 +59,43 @@ This project follows an agile, progressively enhanced architecture where the fro
   * The chart now overlays four distinct paths: The Model's Forecast, the Actual Spot Price, a Naive Baseline (persistence), and the Industry Norm (Default Market Offer).
 * **Language / Stack:** Python, PyTorch / Darts, SHAP.
 
+**Phase 2 Progress Update (In Progress):**
+
+*Forecasting target (defined):*
+  * Primary prediction: **VIC1 spot price** over the next **24 hours** at **30-minute** resolution (48 steps).
+  * Inputs: past market data (price, demand, renewables, interconnector flow) + future weather forecast covariates + calendar features.
+  * Baseline ladder planned: persistence → seasonal naive → XGBoost → xLSTM/TFT.
+
+*Historical training data pipelines (implemented):*
+  * **Energy (`src/fetch_energy_history.py`):** Chunked 2-year backfill (default 7-day chunks), CLI (`--days`, `--chunk-days`, `--regions`), per-region validation, and CI-friendly exit codes. Pulls VIC1 + adjacent regions (NSW1, SA1) via `src/api_clients/pricing_api.py`.
+  * **Energy client improvements (`src/api_clients/pricing_api.py`):** Date-range fetch methods, real `interconnector_flow_mw` from OpenElectricity `FLOW_IMPORTS`/`FLOW_EXPORTS`, and Melbourne-local datetime normalization for API compatibility.
+  * **Actual weather (`src/fetch_weather_history.py`):** Chunked archive pulls with clip-to-now (avoids future-hour padding), multi-region support (`--all-vic-regions`), validation, and CLI exit codes.
+  * **Forecast weather (`src/fetch_weather_forecast_history.py`):** Historical forecast backfill via Open-Meteo **Previous Runs API** (`--lead-days 1` ≈ 24h ahead) and live snapshot append mode (`--mode snapshot`). Supports all five VIC regions.
+  * **Open-Meteo client (`src/api_clients/open_meteo.py`):** `get_historical_forecast_df()` (Previous Runs), `get_live_forecast_snapshot_df()` (live forecast API with `forecast_hours`), plus existing archive and multi-location helpers.
+  * **Unified weather schema (`src/config/weather_schema.py`):** Canonical columns for actual + forecast rows (`region`, `timestamp`, `forecast_issue_time`, `lead_hours`, `record_type`, `source`, weather features). Shared chunking, clipping, validation, and location resolution.
+  * **Modeling table builder (`src/build_weather_training_table.py`):** Merges aligned actual + forecast CSVs into `data/processed/weather_modeling_vic.csv` and reports the modeling overlap window.
+
+*Raw datasets produced (example commands):*
+```bash
+python src/fetch_energy_history.py --days 730 --chunk-days 7
+python src/fetch_weather_history.py --all-vic-regions --days 730 --chunk-days 30
+python src/fetch_weather_forecast_history.py --mode historical --all-vic-regions --days 730 --chunk-days 30 --lead-days 1
+python src/build_weather_training_table.py --days 730 --lead-days 1
+```
+
+*Key output files (`data/raw/` and `data/processed/`):*
+  * `market_{REGION}_730d.csv` — energy actuals (5-min), per NEM region
+  * `weather_actual_vic_730d.csv` — actual weather, 5 VIC regions, hourly
+  * `weather_forecast_history_vic_730d_lead1d.csv` — historical forecasts with issue-time semantics
+  * `weather_forecast_snapshots_vic.csv` — append-only live forecast snapshots (snapshot mode)
+  * `weather_modeling_vic.csv` — combined actual + forecast table for model training
+
+*Still to do (core Phase 2 deliverables):*
+  * Train/evaluate baseline + xLSTM/TFT price forecast models in `notebooks/02_xlstm_forecasting.ipynb` / `src/models/`.
+  * Walk-forward validation and arbitrage-relevant metrics (peak/trough MAE, simulated battery P&L).
+  * SHAP feature importance for forecast explainability.
+  * Frontend `v2_predictive` look-ahead overlay (model vs actual vs naive vs DMO reference).
+
 ### Phase 3: Autonomous Orchestrator & The Command Center
 **Description:** Prototyping the cognitive agent that binds forecasts, live data, and physical constraints, making it visible to the user.
 * **Backend Outcomes:** * A functioning agentic loop (Perception $\rightarrow$ Reasoning $\rightarrow$ Action) that invokes the forecasting model as a tool.
@@ -114,12 +151,15 @@ energy-arbitrage/
 │   ├── models/                 # PyTorch/xLSTM architectures
 │   ├── agent/                  # LLM orchestration and tools
 │   ├── config/
-│   │   └── locations.py        # VICTORIA_WEATHER_LOCATIONS constants
+│   │   ├── locations.py        # VICTORIA_WEATHER_LOCATIONS constants
+│   │   └── weather_schema.py   # Canonical weather export schema + validation helpers
 │   ├── api_clients/
 │   │   ├── open_meteo.py
 │   │   ├── pricing_api.py
 │   │   └── testing.py
 │   ├── fetch_weather_history.py
+│   ├── fetch_weather_forecast_history.py
+│   ├── build_weather_training_table.py
 │   ├── fetch_energy_history.py
 │   └── main.py                 # FastAPI app
 │

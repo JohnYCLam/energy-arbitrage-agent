@@ -7,9 +7,24 @@ class OpenMeteoClient:
     A client for fetching historical weather data from the Open-Meteo API.
     """
     BASE_URL = "https://archive-api.open-meteo.com/v1/archive"
+    FORECAST_BASE_URL = "https://api.open-meteo.com/v1/forecast"
+    PREVIOUS_RUNS_BASE_URL = "https://previous-runs-api.open-meteo.com/v1/forecast"
+    DEFAULT_TIMEZONE = "Australia/Melbourne"
+    HOURLY_WEATHER_VARS = (
+        "temperature_2m",
+        "shortwave_radiation",
+        "cloudcover",
+        "wind_speed_10m",
+    )
+    HOURLY_WEATHER_COLUMN_MAP = {
+        "temperature_2m": "temperature",
+        "shortwave_radiation": "solar_irradiance",
+        "cloudcover": "cloudcover",
+        "wind_speed_10m": "wind_speed",
+    }
 
-    @staticmethod
-    def _normalize_hourly_df(df_weather: pd.DataFrame) -> Optional[pd.DataFrame]:
+    @classmethod
+    def _normalize_hourly_df(cls, df_weather: pd.DataFrame) -> Optional[pd.DataFrame]:
         """Normalizes Open-Meteo hourly columns to a consistent schema."""
         if df_weather.empty:
             return None
@@ -17,12 +32,64 @@ class OpenMeteoClient:
         df_weather = df_weather.rename(
             columns={
                 "time": "timestamp",
-                "shortwave_radiation": "solar_irradiance",
-                "temperature_2m": "temperature",
-                "wind_speed_10m": "wind_speed",
+                **cls.HOURLY_WEATHER_COLUMN_MAP,
             }
         )
         return df_weather
+
+    @classmethod
+    def _previous_run_hourly_vars(cls, lead_days: int) -> str:
+        if lead_days < 0 or lead_days > 7:
+            raise ValueError("lead_days must be between 0 and 7 for Previous Runs API.")
+        suffix = f"_previous_day{lead_days}"
+        return ",".join(f"{var}{suffix}" for var in cls.HOURLY_WEATHER_VARS)
+
+    @classmethod
+    def _previous_run_payload_to_forecast_df(
+        cls,
+        weather_data: Dict[str, Any],
+        *,
+        lead_days: int,
+        latitude: float,
+        longitude: float,
+    ) -> Optional[pd.DataFrame]:
+        if not weather_data or "hourly" not in weather_data:
+            return None
+
+        hourly = weather_data["hourly"]
+        if "time" not in hourly:
+            return None
+
+        suffix = f"_previous_day{lead_days}"
+        rows: List[Dict[str, Any]] = []
+        times = hourly["time"]
+        for idx, target_time in enumerate(times):
+            row: Dict[str, Any] = {
+                "target_time": target_time,
+                "lead_hours": lead_days * 24,
+                "latitude": latitude,
+                "longitude": longitude,
+                "source": "previous_runs",
+            }
+            has_value = False
+            for api_var, col_name in cls.HOURLY_WEATHER_COLUMN_MAP.items():
+                api_col = f"{api_var}{suffix}"
+                value = hourly.get(api_col, [None] * len(times))[idx]
+                row[col_name] = value
+                if value is not None:
+                    has_value = True
+            if has_value:
+                rows.append(row)
+
+        if not rows:
+            return None
+
+        df = pd.DataFrame(rows)
+        df["target_time"] = pd.to_datetime(df["target_time"], errors="coerce")
+        df = df.dropna(subset=["target_time"]).sort_values("target_time")
+        df["forecast_issue_time"] = df["target_time"] - pd.Timedelta(days=lead_days)
+        # API returns naive local timestamps when timezone=Australia/Melbourne.
+        return df.reset_index(drop=True)
 
     @classmethod
     def _hourly_payload_to_df(cls, weather_data: Dict[str, Any]) -> Optional[pd.DataFrame]:
@@ -158,6 +225,159 @@ class OpenMeteoClient:
         if isinstance(weather_data, list):
             return None
         return self._hourly_payload_to_df(weather_data)
+
+    def get_historical_forecast_payload(
+        self,
+        latitude: float,
+        longitude: float,
+        start_date: str,
+        end_date: str,
+        lead_days: int = 1,
+        timezone: str = DEFAULT_TIMEZONE,
+    ) -> Dict[str, Any]:
+        """
+        Fetches archived forecast values at a fixed lead-time offset using the
+        Open-Meteo Previous Runs API.
+
+        lead_days=1 corresponds to variables like temperature_2m_previous_day1,
+        i.e. the forecast made approximately 24 hours before target_time.
+        """
+        params = {
+            "latitude": latitude,
+            "longitude": longitude,
+            "start_date": start_date,
+            "end_date": end_date,
+            "hourly": self._previous_run_hourly_vars(lead_days),
+            "timezone": timezone,
+        }
+        try:
+            response = requests.get(self.PREVIOUS_RUNS_BASE_URL, params=params, timeout=60)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            print(f"An error occurred while fetching historical forecast data: {e}")
+            return {}
+
+    def get_historical_forecast_df(
+        self,
+        latitude: float,
+        longitude: float,
+        start_date: str,
+        end_date: str,
+        lead_days: int = 1,
+        timezone: str = DEFAULT_TIMEZONE,
+    ) -> Optional[pd.DataFrame]:
+        """
+        Returns archived forecast rows with issue-time semantics.
+
+        Columns:
+        - forecast_issue_time: approximate model issue time (target_time - lead_days)
+        - target_time: valid time for the forecast value
+        - lead_hours: fixed lead offset in hours (lead_days * 24)
+        - temperature, solar_irradiance, cloudcover, wind_speed
+        - latitude, longitude, source
+        """
+        payload = self.get_historical_forecast_payload(
+            latitude=latitude,
+            longitude=longitude,
+            start_date=start_date,
+            end_date=end_date,
+            lead_days=lead_days,
+            timezone=timezone,
+        )
+        return self._previous_run_payload_to_forecast_df(
+            payload,
+            lead_days=lead_days,
+            latitude=latitude,
+            longitude=longitude,
+        )
+
+    def get_live_forecast_snapshot_df(
+        self,
+        latitude: float,
+        longitude: float,
+        forecast_hours: int = 24,
+        timezone: str = DEFAULT_TIMEZONE,
+    ) -> Optional[pd.DataFrame]:
+        """
+        Captures a live forecast snapshot for persistence/backtesting.
+
+        Each row contains:
+        - forecast_issue_time: when this snapshot was taken
+        - target_time: forecast valid time
+        - lead_hours: hours from issue_time to target_time
+        """
+        if forecast_hours <= 0:
+            raise ValueError("forecast_hours must be greater than 0.")
+
+        # Request an explicit hourly horizon from now. Using forecast_days=1 fails
+        # late in the day because the API day window may not include tomorrow.
+        request_hours = min(240, forecast_hours + 1)
+        params = {
+            "latitude": latitude,
+            "longitude": longitude,
+            "hourly": ",".join(self.HOURLY_WEATHER_VARS),
+            "forecast_hours": request_hours,
+            "timezone": timezone,
+        }
+        try:
+            response = requests.get(self.FORECAST_BASE_URL, params=params, timeout=60)
+            response.raise_for_status()
+            payload = response.json()
+        except requests.exceptions.RequestException as e:
+            print(f"An error occurred while fetching live forecast snapshot: {e}")
+            return None
+
+        if not payload or "hourly" not in payload:
+            return None
+
+        hourly_df = self._hourly_payload_to_df(payload)
+        if hourly_df is None or hourly_df.empty:
+            return None
+
+        issue_time = pd.Timestamp.now(tz=timezone).floor("h")
+        hourly_df = hourly_df.rename(columns={"timestamp": "target_time"})
+        hourly_df["target_time"] = pd.to_datetime(hourly_df["target_time"], errors="coerce")
+        hourly_df = hourly_df.dropna(subset=["target_time"])
+        hourly_df["target_time"] = hourly_df["target_time"].dt.tz_localize(
+            timezone,
+            ambiguous="NaT",
+            nonexistent="shift_forward",
+        )
+        hourly_df = hourly_df.dropna(subset=["target_time"])
+        if hourly_df.empty:
+            print(
+                "Live forecast snapshot: no rows after timestamp localization "
+                f"(timezone={timezone})."
+            )
+            return None
+
+        # Keep strictly future target hours relative to issue time.
+        horizon_end = issue_time + pd.Timedelta(hours=forecast_hours)
+        hourly_df = hourly_df[
+            (hourly_df["target_time"] > issue_time)
+            & (hourly_df["target_time"] <= horizon_end)
+        ]
+        if hourly_df.empty:
+            print(
+                "Live forecast snapshot: no rows in forecast window "
+                f"{issue_time} -> {horizon_end} (requested {forecast_hours}h)."
+            )
+            return None
+
+        hourly_df["forecast_issue_time"] = issue_time
+        hourly_df["lead_hours"] = (
+            (hourly_df["target_time"] - hourly_df["forecast_issue_time"]).dt.total_seconds()
+            // 3600
+        ).astype(int)
+        hourly_df["latitude"] = latitude
+        hourly_df["longitude"] = longitude
+        hourly_df["source"] = "live_forecast"
+
+        # Store naive Melbourne local timestamps in CSV-friendly format.
+        hourly_df["forecast_issue_time"] = hourly_df["forecast_issue_time"].dt.tz_localize(None)
+        hourly_df["target_time"] = hourly_df["target_time"].dt.tz_localize(None)
+        return hourly_df.reset_index(drop=True)
 
     def get_latest_weather_df(
         self,
