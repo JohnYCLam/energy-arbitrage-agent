@@ -18,6 +18,7 @@ dependencies:
       - "openelectricity[analysis]"
       - darts
       - shap
+      - xgboost
       - langchain
       - langgraph
       - openai

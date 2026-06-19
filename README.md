@@ -62,9 +62,45 @@ This project follows an agile, progressively enhanced architecture where the fro
 **Phase 2 Progress Update (In Progress):**
 
 *Forecasting target (defined):*
-  * Primary prediction: **VIC1 spot price** over the next **24 hours** at **30-minute** resolution (48 steps).
-  * Inputs: past market data (price, demand, renewables, interconnector flow) + future weather forecast covariates + calendar features.
-  * Baseline ladder planned: persistence → seasonal naive → XGBoost → xLSTM/TFT.
+  * Primary prediction: **VIC1 spot price** over the next **24 hours** at **15-minute** resolution (**96 steps**).
+  * Strategy: **direct multi-step** forecasting (not autoregressive on price); no future price labels as model inputs.
+  * Inputs: past market data (price, demand, renewables, interconnector flow) + weather covariates (linearly upsampled from hourly) + calendar features.
+  * Baseline ladder: persistence → seasonal naive → XGBoost → TFT/xLSTM (deep models planned).
+
+*Forecasting configuration & alignment (implemented):*
+  * **`config/forecasting.yaml`** — single source of truth for grid interval, horizon, walk-forward windows, TFT hyperparameters, and region list. Change `interval_minutes` here (and in `config/settings.yaml`) to migrate resolution later without code edits.
+  * **`src/config/forecasting.py`** — `ForecastingConfig` dataclass with derived values (`forecast_steps`, `input_chunk_length`, `pandas_freq`, `seasonal_naive_lag`).
+  * **`src/models/align_timeseries.py`** — aligns 5-min energy (mean-aggregated) and hourly weather (time-interpolated, solar clipped ≥ 0) onto the modeling grid; adds calendar features; used by `main.py` and the price table builder.
+  * **`src/main.py`** — refactored to load interval settings from config instead of hard-coded values.
+
+*Price modeling table (implemented):*
+  * **`src/build_price_training_table.py`** — merges aligned energy (VIC1 + NSW1 + SA1) with actual + forecast weather into a joint modeling CSV.
+  * Example output: `data/processed/price_modeling_vic_730d.csv` (~70k rows × 83 columns, target `vic1_price`).
+
+```bash
+python src/build_price_training_table.py --days 730
+```
+
+*Baselines & walk-forward validation (implemented):*
+  * **`src/models/baselines.py`** — persistence and seasonal-naive forecast functions.
+  * **`src/evaluation/walk_forward.py`** — weekly-origin walk-forward harness with selection/holdout splits, per-fold MAE/RMSE, `collect_fold_predictions()`, and `consolidate_walk_forward_predictions()`.
+  * **`src/evaluation/plotting.py`** — time-series and diagnostic plots (actual vs predicted over time, single 24h windows, scatter/MAE panels).
+  * **`notebooks/02_xlstm_forecasting.ipynb`** — EDA, walk-forward baseline evaluation, XGBoost (or sklearn HGBR fallback) per-horizon tabular model, and **actual vs predicted time-series plots** for training and holdout.
+  * **`tests/test_forecasting_config.py`** — unit tests for config loading and derived horizon/chunk lengths.
+
+*Example walk-forward results (selection window, ~40 weekly origins):*
+
+| Model | MAE ($/MWh) | RMSE ($/MWh) |
+|-------|-------------|--------------|
+| Seasonal naive | ~70 | ~124 |
+| Persistence | ~128 | ~173 |
+
+```bash
+# Rebuild modeling table, run config tests, open forecasting notebook
+python src/build_price_training_table.py --days 730
+python -m pytest tests/test_forecasting_config.py -q
+jupyter notebook notebooks/02_xlstm_forecasting.ipynb
+```
 
 *Historical training data pipelines (implemented):*
   * **Energy (`src/fetch_energy_history.py`):** Chunked 2-year backfill (default 7-day chunks), CLI (`--days`, `--chunk-days`, `--regions`), per-region validation, and CI-friendly exit codes. Pulls VIC1 + adjacent regions (NSW1, SA1) via `src/api_clients/pricing_api.py`.
@@ -84,15 +120,17 @@ python src/build_weather_training_table.py --days 730 --lead-days 1
 ```
 
 *Key output files (`data/raw/` and `data/processed/`):*
-  * `market_{REGION}_730d.csv` — energy actuals (5-min), per NEM region
+  * `market_{REGION}_730d.csv` — energy actuals (5-min native), per NEM region
   * `weather_actual_vic_730d.csv` — actual weather, 5 VIC regions, hourly
   * `weather_forecast_history_vic_730d_lead1d.csv` — historical forecasts with issue-time semantics
   * `weather_forecast_snapshots_vic.csv` — append-only live forecast snapshots (snapshot mode)
-  * `weather_modeling_vic.csv` — combined actual + forecast table for model training
+  * `weather_modeling_vic.csv` — combined actual + forecast weather table
+  * `price_modeling_vic_730d.csv` — joint energy + weather table for VIC1 price forecasting
 
 *Still to do (core Phase 2 deliverables):*
-  * Train/evaluate baseline + xLSTM/TFT price forecast models in `notebooks/02_xlstm_forecasting.ipynb` / `src/models/`.
-  * Walk-forward validation and arbitrage-relevant metrics (peak/trough MAE, simulated battery P&L).
+  * Train/evaluate **TFT** and **xLSTM** price forecast models (Darts / PyTorch).
+  * Walk-forward evaluation for XGBoost and deep models (notebook currently uses in-sample MAE per horizon for tabular model).
+  * Arbitrage-relevant metrics (peak/trough slot MAE, simulated battery P&L).
   * SHAP feature importance for forecast explainability.
   * Frontend `v2_predictive` look-ahead overlay (model vs actual vs naive vs DMO reference).
 
@@ -124,7 +162,8 @@ python src/build_weather_training_table.py --days 730 --lead-days 1
 energy-arbitrage/
 │
 ├── config/
-│   ├── settings.yaml           # House parameters (battery capacity, location)
+│   ├── settings.yaml           # House parameters (battery capacity, location, interval)
+│   ├── forecasting.yaml        # Grid resolution, horizon, walk-forward, model hyperparams
 │   └── prompt_templates/       # Agent persona and constraints
 │
 ├── data/
@@ -141,17 +180,23 @@ energy-arbitrage/
 │
 ├── notebooks/                  
 │   ├── 01_data_exploration.ipynb
-│   ├── 02_xlstm_forecasting.ipynb  # xLSTM setup (no backend arg)
+│   ├── 02_xlstm_forecasting.ipynb  # Baselines, walk-forward, XGBoost, forecast plots
 │   └── 03_agent_reasoning.ipynb
 │
 ├── scripts/                    # One-off utilities
 │   └── generate_vic_regions.py # Builds Victoria sub-region polygons (Voronoi)
 │
 ├── src/                        # Modularized Python Backend
-│   ├── models/                 # PyTorch/xLSTM architectures
+│   ├── models/
+│   │   ├── align_timeseries.py # Energy/weather alignment + calendar features
+│   │   └── baselines.py        # Persistence + seasonal naive forecasters
+│   ├── evaluation/
+│   │   ├── walk_forward.py     # Walk-forward validation harness
+│   │   └── plotting.py         # Actual vs predicted forecast plots
 │   ├── agent/                  # LLM orchestration and tools
 │   ├── config/
 │   │   ├── locations.py        # VICTORIA_WEATHER_LOCATIONS constants
+│   │   ├── forecasting.py      # ForecastingConfig loader + derived horizons
 │   │   └── weather_schema.py   # Canonical weather export schema + validation helpers
 │   ├── api_clients/
 │   │   ├── open_meteo.py
@@ -160,6 +205,7 @@ energy-arbitrage/
 │   ├── fetch_weather_history.py
 │   ├── fetch_weather_forecast_history.py
 │   ├── build_weather_training_table.py
+│   ├── build_price_training_table.py
 │   ├── fetch_energy_history.py
 │   └── main.py                 # FastAPI app
 │
@@ -190,7 +236,9 @@ energy-arbitrage/
 │   ├── v2_predictive/          # Forecast overlays
 │   └── v3_command_center/      # Agent trace & ROI scorecard
 │
-├── tests/                      # Planned pytest suite
+├── tests/                      # Pytest suite
+│   ├── conftest.py
+│   └── test_forecasting_config.py
 ├── GEMINI.md                   # Optional AI workflow notes
 ├── environment.yaml            # Conda environment spec
 ├── .env.example                # API keys template

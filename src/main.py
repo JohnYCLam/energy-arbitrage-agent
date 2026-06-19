@@ -14,6 +14,13 @@ load_dotenv(BASE_DIR / ".env")
 from src.api_clients.pricing_api import OpenNEMClient
 from src.api_clients.open_meteo import OpenMeteoClient
 from src.config.locations import VICTORIA_WEATHER_LOCATIONS
+from src.config.forecasting import load_forecasting_config
+from src.models.align_timeseries import (
+    align_energy_df,
+    align_weather_df,
+    merge_energy_weather,
+    normalize_live_energy_df,
+)
 
 app = FastAPI(title="Energy Arbitrage API", version="1.0.0")
 
@@ -41,91 +48,55 @@ def load_settings():
         }
 
 
-def _normalize_energy_price_df(df_price: pd.DataFrame) -> pd.DataFrame:
-    """Maps and normalizes OpenElectricity price/demand timestamps to Melbourne time."""
-    col_map = {
-        col: "timestamp"
-        for col in df_price.columns
-        if "interval" in str(col).lower() or "time" in str(col).lower()
-    }
-    col_map.update(
-        {
-            col: "spot_price"
-            for col in df_price.columns
-            if "value" in str(col).lower() or "price" in str(col).lower()
-        }
-    )
-    col_map.update(
-        {col: "demand" for col in df_price.columns if "demand" in str(col).lower()}
-    )
-
-    normalized = df_price.rename(columns=col_map).copy()
-    normalized["timestamp"] = (
-        pd.to_datetime(normalized["timestamp"], utc=True).dt.tz_convert("Australia/Melbourne")
-    )
-    return normalized
-
 @app.get("/api/v1/market-data")
 def get_market_data():
     """
-    Fetches live data from OpenElectricity and Open-Meteo, merges them 
-    into a synchronized 30-minute time-series DataFrame, and returns JSON.
+    Fetches live data from OpenElectricity and Open-Meteo, merges them
+    into a synchronized time-series DataFrame at the configured forecast
+    grid resolution, and returns JSON.
     """
     settings = load_settings()
+    cfg = load_forecasting_config()
     nem_region = settings["market"]["nem_region"]
     lat = settings["location"]["latitude"]
     lon = settings["location"]["longitude"]
-    
+
     try:
-        # 1. Fetch Real Pricing Data (Last 2 days to keep the API fast)
         pricing_client = OpenNEMClient()
         df_price = pricing_client.get_regional_energy_data(nem_region, days=2)
-        
-        # 2. Fetch Real Weather Data
+
         meteo_client = OpenMeteoClient()
         end_date = datetime.now()
         start_date = end_date - timedelta(days=2)
         df_weather = meteo_client.get_historical_weather_df(
             latitude=lat,
             longitude=lon,
-            start_date=start_date.strftime("%Y-%m-%d"), 
-            end_date=end_date.strftime("%Y-%m-%d")
+            start_date=start_date.strftime("%Y-%m-%d"),
+            end_date=end_date.strftime("%Y-%m-%d"),
         )
-        
-        # 3. Standardize and Process Price Data
-        if df_price is not None and not df_price.empty:
-            df_price = df_price.reset_index()
 
-            df_price = _normalize_energy_price_df(df_price)
-            df_price = df_price.set_index("timestamp")
-            
-            # Clean duplicates and resample explicitly to 30 minutes
-            df_price = df_price[~df_price.index.duplicated()]
-            cols_to_resample = [c for c in df_price.columns if c in ['spot_price', 'demand', 'renewable_generation', 'interconnector_flow_mw'] or c.startswith('gen_')]
-            if cols_to_resample:
-                df_price = df_price[cols_to_resample].resample('30min').mean()
+        if df_price is not None and not df_price.empty:
+            df_price = normalize_live_energy_df(df_price.reset_index(), cfg=cfg)
+            df_price = align_energy_df(df_price, cfg, timestamp_col="timestamp")
         else:
             df_price = pd.DataFrame()
 
-        # 4. Standardize and Process Weather Data
         if df_weather is not None and not df_weather.empty:
-            # Open-Meteo now returns naive Melbourne local times; localize to match energy.
-            df_weather['timestamp'] = pd.to_datetime(df_weather['timestamp']).dt.tz_localize(
-                'Australia/Melbourne', ambiguous='NaT', nonexistent='shift_forward'
-            )
-            df_weather = df_weather.set_index('timestamp')
-            
-            # Weather is hourly, so we forward-fill to get it to our 30-min target interval
-            df_weather = df_weather.resample('30min').ffill()
+            df_weather = align_weather_df(df_weather, cfg)
         else:
             df_weather = pd.DataFrame()
 
-        # 5. Merge Both Datasets Chronologically
-        df_merged = pd.merge(df_price, df_weather, left_index=True, right_index=True, how='inner')
-        
-        # Convert datetime index back to ISO strings (with +10:00 offset) before passing to React
+        if df_price.empty or df_weather.empty:
+            df_merged = pd.DataFrame()
+        else:
+            df_merged = merge_energy_weather(df_price, df_weather, cfg)
+
+        if df_merged.empty:
+            return []
+
+        df_merged.index.name = "timestamp"
         df_merged = df_merged.reset_index()
-        df_merged['timestamp'] = df_merged['timestamp'].apply(lambda ts: ts.isoformat())
+        df_merged["timestamp"] = df_merged["timestamp"].apply(lambda ts: ts.isoformat())
         df_merged = df_merged.fillna(0)
 
         return df_merged.to_dict(orient="records")
@@ -182,7 +153,7 @@ def get_victoria_data(hours: int = 24):
         cutoff = now_local - pd.Timedelta(hours=hours)
 
         if df_energy is not None and not df_energy.empty:
-            normalized_energy = _normalize_energy_price_df(df_energy)
+            normalized_energy = normalize_live_energy_df(df_energy.reset_index(), cfg=load_forecasting_config())
             normalized_energy = normalized_energy.sort_values("timestamp")
             normalized_energy = normalized_energy[
                 (normalized_energy["timestamp"] > cutoff)

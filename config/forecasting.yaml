@@ -1,0 +1,37 @@
+timezone: "Australia/Melbourne"
+
+# Grid resolution — change interval_minutes to 5 later without code edits
+interval_minutes: 15
+forecast_horizon_hours: 24
+input_chunk_days: 7
+
+# Native source resolutions (do not change unless data pipeline changes)
+energy_native_minutes: 5
+weather_native_minutes: 60
+
+# Alignment rules
+energy_resample: mean
+weather_upsample: interpolate
+weather_solar_clip_zero: true
+
+# Model hyperparameters (chunk lengths are derived in forecasting.py)
+model:
+  tft_hidden_size: 64
+  tft_lstm_layers: 2
+  tft_attention_heads: 4
+  tft_dropout: 0.1
+  tft_batch_size: 64
+  tft_n_epochs: 50
+
+walk_forward:
+  origin_freq_days: 7
+  origin_hour: 18
+  min_train_days: 365
+  holdout_days: 90
+
+arbitrage:
+  peak_trough_slots_per_day: 12
+
+regions:
+  target: "VIC1"
+  adjacent: ["NSW1", "SA1"]

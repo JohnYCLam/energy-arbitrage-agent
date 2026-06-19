@@ -6,4 +6,4 @@ location:
 market:
   nem_region: "VIC1"  # Primary region (Victoria)
   adjacent_regions: ["NSW1", "SA1"] # Used to monitor interconnector influences
-  interval_minutes: 30 # Target resolution for merging data
+  interval_minutes: 15 # Target resolution for merging data (sync with config/forecasting.yaml)
